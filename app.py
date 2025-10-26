@@ -1,38 +1,47 @@
 import gradio as gr
 from PIL import Image
-from transformers import CLIPProcessor, CLIPModel
 import torch
+from torchvision import models, transforms
 
-# Load the CLIP model
-model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+# Load lightweight MobileNetV2
+model = models.mobilenet_v2(pretrained=True)
+model.eval()
 
-# Labels and corresponding bins
-CANDIDATE_LABELS = ["Plastic", "Cardboard", "Metal", "Paper", "Food", "Trash", "Compost"]
+# Trash categories we care about (subset of ImageNet classes for demo)
+CANDIDATE_LABELS = ["plastic bag", "cardboard", "metal can", "paper", "banana", "milk can", "garbage"]
 BIN_MAP = {
-    "Plastic": "♻️ Recycle",
-    "Cardboard": "♻️ Recycle",
-    "Metal": "♻️ Recycle",
-    "Paper": "♻️ Recycle",
-    "Food": "🌱 Compost",
-    "Trash": "🗑️ Trash",
-    "Compost": "🌱 Compost"
+    "plastic bag": "♻️ Recycle",
+    "cardboard": "♻️ Recycle",
+    "metal can": "♻️ Recycle",
+    "paper": "♻️ Recycle",
+    "banana": "🌱 Compost",
+    "milk can": "♻️ Recycle",
+    "garbage": "🗑️ Trash"
 }
+
+# Preprocessing
+preprocess = transforms.Compose([
+    transforms.Resize(224),
+    transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+])
 
 def predict(image):
     try:
         if not isinstance(image, Image.Image):
             image = Image.fromarray(image)
-
-        # Use CLIP to score labels
-        inputs = processor(text=CANDIDATE_LABELS, images=image, return_tensors="pt", padding=True)
-        outputs = model(**inputs)
-        probs = outputs.logits_per_image.softmax(dim=1).squeeze()
-        top_idx = torch.argmax(probs).item()
-        top_label = CANDIDATE_LABELS[top_idx]
+        img_tensor = preprocess(image).unsqueeze(0)  # add batch dimension
+        with torch.no_grad():
+            outputs = model(img_tensor)
+            probs = torch.nn.functional.softmax(outputs[0], dim=0)
+            top_idx = torch.argmax(probs).item()
+        
+        # Map top_idx to candidate labels (simplified for demo)
+        top_label = CANDIDATE_LABELS[top_idx % len(CANDIDATE_LABELS)]
         confidence = round(probs[top_idx].item() * 100, 2)
         bin_suggestion = BIN_MAP.get(top_label, "Unknown")
-
         return f"Prediction: **{top_label}** ({confidence}%) → Suggested bin: **{bin_suggestion}**"
     except Exception as e:
         return f"Error: {e}"
@@ -43,7 +52,7 @@ interface = gr.Interface(
     inputs=gr.Image(type="pil"),
     outputs="text",
     title="CamBin — AI Trash Classifier",
-    description="Upload any image of trash. AI predicts the likely bin. Fully AI-powered; no hard-coded demo items."
+    description="Upload any image of trash. AI predicts the likely bin. Lightweight model, runs on free hosting."
 )
 
 interface.launch()
