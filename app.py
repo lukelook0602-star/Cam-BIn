@@ -1,58 +1,39 @@
 import gradio as gr
+from transformers import pipeline
 from PIL import Image
-import torch
-from torchvision import models, transforms
 
-# Load lightweight MobileNetV2
-model = models.mobilenet_v2(pretrained=True)
-model.eval()
+# Category options
+categories = ["Recycle", "Compost", "Trash"]
 
-# Trash categories we care about (subset of ImageNet classes for demo)
-CANDIDATE_LABELS = ["plastic bag", "cardboard", "metal can", "paper", "banana", "milk can", "garbage"]
-BIN_MAP = {
-    "plastic bag": "♻️ Recycle",
-    "cardboard": "♻️ Recycle",
-    "metal can": "♻️ Recycle",
-    "paper": "♻️ Recycle",
-    "banana": "🌱 Compost",
-    "milk can": "♻️ Recycle",
-    "garbage": "🗑️ Trash"
-}
+# Load models
+image_model = pipeline("image-classification", model="microsoft/resnet-50")
+text_model = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
 
-# Preprocessing
-preprocess = transforms.Compose([
-    transforms.Resize(224),
-    transforms.CenterCrop(224),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
-])
+def classify_trash(image, description):
+    # Get predictions
+    image_pred = image_model(image)[0]["label"].lower()
+    text_pred = text_model(description, candidate_labels=categories)
+    text_pred_label = text_pred["labels"][0]
 
-def predict(image):
-    try:
-        if not isinstance(image, Image.Image):
-            image = Image.fromarray(image)
-        img_tensor = preprocess(image).unsqueeze(0)  # add batch dimension
-        with torch.no_grad():
-            outputs = model(img_tensor)
-            probs = torch.nn.functional.softmax(outputs[0], dim=0)
-            top_idx = torch.argmax(probs).item()
-        
-        # Map top_idx to candidate labels (simplified for demo)
-        top_label = CANDIDATE_LABELS[top_idx % len(CANDIDATE_LABELS)]
-        confidence = round(probs[top_idx].item() * 100, 2)
-        bin_suggestion = BIN_MAP.get(top_label, "Unknown")
-        return f"Prediction: **{top_label}** ({confidence}%) → Suggested bin: **{bin_suggestion}**"
-    except Exception as e:
-        return f"Error: {e}"
+    # Decision logic
+    if image_pred == text_pred_label.lower():
+        result = f"✅ Confident: {text_pred_label}"
+    else:
+        result = f"🤔 Perhaps: {text_pred_label}"
 
-# Gradio interface
-interface = gr.Interface(
-    fn=predict,
-    inputs=gr.Image(type="pil"),
-    outputs="text",
-    title="CamBin — AI Trash Classifier",
-    description="Upload any image of trash. AI predicts the likely bin. Lightweight model, runs on free hosting."
+    return result
+
+# Build app
+app = gr.Interface(
+    fn=classify_trash,
+    inputs=[
+        gr.Image(type="pil", label="Take or Upload a Photo"),
+        gr.Textbox(label="Describe the Item (e.g. banana peel, soda can)")
+    ],
+    outputs=gr.Textbox(label="Sorting Suggestion"),
+    title="♻️ Cam-Bin",
+    description="Upload a photo and describe the item. The AI will tell whether it's compost, recycle, or trash — showing confidence if both agree."
 )
 
-interface.launch()
+if __name__ == "__main__":
+    app.launch()
